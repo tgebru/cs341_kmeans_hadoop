@@ -1,9 +1,11 @@
 package edu.stanford.cs246.hw2;
 
 import java.io.IOException;
+import java.io.File;
 
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.input.MultipleInputs;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import java.io.BufferedReader;
 import java.io.DataInputStream;
@@ -97,13 +99,13 @@ public class KMeans {
 			//String uriStr =  conf.get("fs.default.name");
 			
 			Configuration conf = context.getConfiguration();
-			String uriStr =  "./input";//"s3n://energydata/input/";
+			String uriStr =  "s3n://energydata/centroid/";//"./centroid";
 			URI uri = URI.create(uriStr);
 			FileSystem fs = FileSystem.get(uri, context.getConfiguration());		
 			
 			Path cFile=new Path(fs.getConf().get(CFILE));
 			
-			System.out.println(cFile.toString());
+			System.out.println("Mapper centroid input:" + cFile.toString());
 			
 			System.out.println(cFile.toString());
 			DataInputStream d = new DataInputStream(fs.open(cFile));
@@ -171,14 +173,14 @@ public class KMeans {
 				InterruptedException {
 
 			// Get the centroids and keep them in memory
-			String uriStr =  "./input";//"s3n://energydata/output/";
+			String uriStr =  "s3n://energydata/output/";//"./output";//;
 			URI uri = URI.create(uriStr);
 			FileSystem fs = FileSystem.get(uri, context.getConfiguration());	
 					
 			//FileSystem fs = FileSystem.get(context.getConfiguration());
 			Path cFile = new Path(context.getConfiguration().get(CFILE));
 			
-			System.out.println(cFile.toString());
+			System.out.println("Reducer Centroid input:" + cFile.toString());
 
 			int  numOfClusters = Integer.valueOf(context.getConfiguration().get(NUMOFCLUSTERS));
 			//System.out.println(numOfClusters);
@@ -280,12 +282,24 @@ public class KMeans {
 		int stepSize=Integer.valueOf(args[5]);
 		int min_clusters = 10;
 		
-		String uriStr =  "./input";//"s3n://energydata/input/";
+		String uriStr =  inputDir;//"./input";//"s3n://energydata/input/";"s3n://energydata/15min/"	
 		URI uri = URI.create(uriStr);
-        FileSystem fs = FileSystem.get(uri, conf);
-        
-		System.out.println(fs.getWorkingDirectory().toString());
+        FileSystem fs = FileSystem.get(uri, conf);   
+		System.out.println("Working directory:"+fs.getWorkingDirectory().toString());
+		
+		//Get all the input files in the input directory and concatenate them with a comma to input
+		//into the hadoop mapper
+		String []inputFilesArray= new File(uriStr).list();
+		StringBuilder fileConcatenator = new StringBuilder();
 
+		for (String n : inputFilesArray) {
+			//fileConcatenator.append("'").append(n).append("',");
+			fileConcatenator.append(uriStr+n).append(",");
+		}
+		
+		fileConcatenator.deleteCharAt(fileConcatenator.length() - 1);
+		String inputFiles = fileConcatenator.toString();
+		System.out.println("inputs:" + inputFiles);
 		
 		//int j=50;
 		String cDir = "";
@@ -309,11 +323,13 @@ public class KMeans {
 					cDir = opDirBase + "/" + (i - 1);
 					// System.out.println("cDir "+i+" :"+cDir);
 					Path inDir = new Path(cDir);
-	
 					inPath = opDirBase + "/c/" + i + "-centroid.txt";
+					Path newCentroid = new Path(inPath);
+		            fs.delete(newCentroid, true); //delete new centroid path if it already exists
 					// Centroid file name for this iteration
-					FileUtil.copyMerge(fs, inDir, fs, new Path(inPath), false,
-							conf, "");
+					//FileUtil.copyMerge(fs, inDir, fs, new Path(inPath), false,conf, "");
+		            FileUtil.copyMerge(fs, inDir, fs, newCentroid, false,conf, "");
+
 				}
 	
 				// Set centroid path
@@ -332,10 +348,14 @@ public class KMeans {
 				job.setOutputKeyClass(Text.class);
 				job.setOutputValueClass(Text.class);
 	
-				FileInputFormat.addInputPath(job, new Path(inputDir));
-				FileOutputFormat.setOutputPath(job, new Path(outputDir));
-	
-				job.waitForCompletion(true);
+				//FileInputFormat.addInputPath(job, new Path(inputDir));
+				//Change to have multiple inputs because input paths because energy data is patitioned into 10 txt files
+				FileInputFormat.addInputPaths(job, inputFiles);
+				Path outputPath = new Path(outputDir);
+	            fs.delete(outputPath, true); //delete output path if it already exists
+				//FileOutputFormat.setOutputPath(job, new Path(outputDir));
+	            FileOutputFormat.setOutputPath(job, outputPath);
+					job.waitForCompletion(true);
 	
 			   }
         }
@@ -363,8 +383,7 @@ public class KMeans {
 			//double[] point = new double[96]; //[tokens.length-2-96];
 			//int length = point.length;
 			int offset=0;
-			//means we have spid & date as well
-			if (tokens[1].contains("-"))offset=2;
+			if (tokens[1].contains("-"))offset=2; //means we have spid & date as well
 			int daily_total=0;
 			for (int i=0;i<length;i++){
 				point[i]=Double.parseDouble(tokens[i+offset]);
