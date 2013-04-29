@@ -282,16 +282,39 @@ public class KMeans {
 		int stepSize=Integer.valueOf(args[5]);
 		int min_clusters = 10;
 		
-		String uriStr =  inputDir;//"./input";//"s3n://energydata/input/";"s3n://energydata/15min/"	
+		
+		String uriStr = inputDir;//"./input";//"s3n://energydata/input/";	
 		URI uri = URI.create(uriStr);
         FileSystem fs = FileSystem.get(uri, conf);   
 		System.out.println("Working directory:"+fs.getWorkingDirectory().toString());
+		String inputFiles = "";
+		String baseFileName    = uriStr+"_electric_interval_data_long_part";
+		String suffix = "_96.txt";
+		int numOfFiles = 10;
+			
+		for (int i=1;i<=numOfFiles;i++){
+			inputFiles +=baseFileName+ String.valueOf(i) +suffix+",";
+		}
+		inputFiles = inputFiles.substring(0, inputFiles.length()-1);
 		
 		//Get all the input files in the input directory and concatenate them with a comma to input
 		//into the hadoop mapper
+		//Hard code the filenames for now cause Amazon EMR is having issues
+		
+	/*	
 		String []inputFilesArray= new File(uriStr).list();
+		System.out.println("Files:" + inputFilesArray.toString());
 		StringBuilder fileConcatenator = new StringBuilder();
-
+		int numOfFiles = inputFilesArray.length;
+		System.out.println(numOfFiles);
+	    String n = "";
+		for (int i=0;i<numOfFiles;i++){
+			n=inputFilesArray[i];
+			fileConcatenator.append(uriStr+n).append(",");
+		}
+	*/	
+	/*	
+	 * For some reason this did not work with amazon aws and a jar file
 		for (String n : inputFilesArray) {
 			//fileConcatenator.append("'").append(n).append("',");
 			fileConcatenator.append(uriStr+n).append(",");
@@ -299,7 +322,8 @@ public class KMeans {
 		
 		fileConcatenator.deleteCharAt(fileConcatenator.length() - 1);
 		String inputFiles = fileConcatenator.toString();
-		System.out.println("inputs:" + inputFiles);
+	*/	
+		//System.out.println("inputs:" + inputFiles);
 		
 		//int j=50;
 		String cDir = "";
@@ -350,13 +374,17 @@ public class KMeans {
 	
 				//FileInputFormat.addInputPath(job, new Path(inputDir));
 				//Change to have multiple inputs because input paths because energy data is patitioned into 10 txt files
-				FileInputFormat.addInputPaths(job, inputFiles);
+				
+				System.out.println("input Files:"+inputFiles);
+				
+				FileInputFormat.addInputPaths(job, inputFiles);	
+				
 				Path outputPath = new Path(outputDir);
 	            fs.delete(outputPath, true); //delete output path if it already exists
 				//FileOutputFormat.setOutputPath(job, new Path(outputDir));
 	            FileOutputFormat.setOutputPath(job, outputPath);
-					job.waitForCompletion(true);
-	
+			    job.waitForCompletion(true);
+			    System.out.println("output Dir:" + outputPath);
 			   }
         }
 
