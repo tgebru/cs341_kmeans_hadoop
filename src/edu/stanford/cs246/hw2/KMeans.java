@@ -7,6 +7,8 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.mapreduce.lib.input.MultipleInputs;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import java.io.BufferedReader;
 import java.io.DataInputStream;
 import java.io.InputStreamReader;
@@ -105,16 +107,16 @@ public class KMeans {
 			
 			Path cFile=new Path(fs.getConf().get(CFILE));
 			
-			System.out.println("Mapper centroid input:" + cFile.toString());
+			//System.out.println("Mapper centroid input:" + cFile.toString());
 			
-			System.out.println(cFile.toString());
+			//System.out.println(cFile.toString());
 			DataInputStream d = new DataInputStream(fs.open(cFile));
 			BufferedReader reader = new BufferedReader(new InputStreamReader(d));
 			String line;
 			int  numOfClusters = Integer.valueOf(context.getConfiguration().get(NUMOFCLUSTERS));
 			int centroidLength=0;
 			while ((line = reader.readLine()) != null) {
-				if (!line.startsWith("C") && !line.startsWith("s")&&centroidLength !=numOfClusters) {
+				if (!line.startsWith("C") && !line.startsWith("s")&& !line.startsWith("w")&&centroidLength !=numOfClusters) {
 					INIT.add(parsePoint(line));
 					centroidLength++;
 					//System.out.println(centroidLength);
@@ -180,7 +182,7 @@ public class KMeans {
 			//FileSystem fs = FileSystem.get(context.getConfiguration());
 			Path cFile = new Path(context.getConfiguration().get(CFILE));
 			
-			System.out.println("Reducer Centroid input:" + cFile.toString());
+			//System.out.println("Reducer Centroid input:" + cFile.toString());
 
 			int  numOfClusters = Integer.valueOf(context.getConfiguration().get(NUMOFCLUSTERS));
 			//System.out.println(numOfClusters);
@@ -189,7 +191,7 @@ public class KMeans {
 			String line;
 			int centroidLength=0;
 			while ((line = reader.readLine()) != null) {
-				if (!line.startsWith("C") && !line.startsWith("s")&& centroidLength !=numOfClusters) { //changed by timnit to write the document IDs for each centroid
+				if (!line.startsWith("C") && !line.startsWith("s")&& !line.startsWith("w")&& centroidLength !=numOfClusters) { //changed by timnit to write the document IDs for each centroid
 					centroidLength++;
 					//System.out.println(centroidLength);
 					INIT.add(parsePoint(line));
@@ -207,6 +209,7 @@ public class KMeans {
 			//System.out.println("Key :"+ key.get());
 			//if statement added by Timnit to get SPID of people in cluster
 			ArrayList<String> infoList = new ArrayList<String>();
+			Log log=LogFactory.getLog(CentroidReducer.class);
 			if (key.get() == -1) { //we are reading the cost
 				double cost = 0;
 				int no = 0;
@@ -229,14 +232,16 @@ public class KMeans {
 
 				// Get average for all dimensions and cost too !
 				for (Text str : values) {
+				    //log.info("Reducer starting comparison");
 					if (!str.toString().startsWith("s")) {//if string has comma it is spid & date
 						double[] point = parsePoint(str.toString());
-
+						//log.info("Reducer finished parsing");   
+						//log.info("Reducer starting calculation");
 						for (int i = 0; i < point.length; i++) {
 							// Average for new centroid
 							average[i] =  average[i]+point[i];
 						}
-
+						//log.info("Reducer ending comparison");
 					    count++;
 					}else { //just save the spid & date
 						infoList.add(str.toString());						
@@ -259,7 +264,8 @@ public class KMeans {
 						result));
 				context.write(new Text(INFO + "-" + key.toString()), new Text(
 						info));
-				
+				//System.out.println("Reducer finished" + Integer.toString(count)); //to see how long reducers are taking & if they're getting stuck
+				log.info("Reducer finished" + Integer.toString(count));
 			}
 
 		}
@@ -288,15 +294,18 @@ public class KMeans {
         FileSystem fs = FileSystem.get(uri, conf);   
 		System.out.println("Working directory:"+fs.getWorkingDirectory().toString());
 		String inputFiles = "";
-		String baseFileName    = uriStr+"_electric_interval_data_long_part";
+		String baseFileName    = uriStr+"electric_interval_data_long_part";
 		String suffix = "_96.txt";
-		int numOfFiles = 10;
-			
+		int numOfFiles = 1;//10;
+	    //*** uncomment this for hadoop		
 		for (int i=1;i<=numOfFiles;i++){
 			inputFiles +=baseFileName+ String.valueOf(i) +suffix+",";
 		}
 		inputFiles = inputFiles.substring(0, inputFiles.length()-1);
+	
 		
+		//inputFiles = uriStr+"energy-data.csv,"+uriStr+"test_shapes.csv";
+	
 		//Get all the input files in the input directory and concatenate them with a comma to input
 		//into the hadoop mapper
 		//Hard code the filenames for now cause Amazon EMR is having issues
@@ -327,7 +336,8 @@ public class KMeans {
 		
 		//int j=50;
 		String cDir = "";
-       for (int j=min_clusters; j<=max_clusters;j+=stepSize){  //Number of clusters
+       //for (int j=min_clusters; j<=max_clusters;j+=stepSize){  //Number of clusters
+			int j=100;
         	String opDirBase = args[1]+String.valueOf(j);
         	conf.set(NUMOFCLUSTERS, String.valueOf(j));
         	//System.out.println(conf.get(NUMOFCLUSTERS));
@@ -375,8 +385,9 @@ public class KMeans {
 				//FileInputFormat.addInputPath(job, new Path(inputDir));
 				//Change to have multiple inputs because input paths because energy data is patitioned into 10 txt files
 				
-				System.out.println("input Files:"+inputFiles);
+				//System.out.println("input Files:"+inputFiles);
 				
+				//***uncomment this for multiple files
 				FileInputFormat.addInputPaths(job, inputFiles);	
 				
 				Path outputPath = new Path(outputDir);
@@ -384,8 +395,8 @@ public class KMeans {
 				//FileOutputFormat.setOutputPath(job, new Path(outputDir));
 	            FileOutputFormat.setOutputPath(job, outputPath);
 			    job.waitForCompletion(true);
-			    System.out.println("output Dir:" + outputPath);
-			   }
+			    //System.out.println("output Dir:" + outputPath);
+			  // }
         }
 
 	}
