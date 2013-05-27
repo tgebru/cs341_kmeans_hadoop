@@ -1,23 +1,19 @@
 package edu.stanford.cs246.hw2;
 
-import java.io.IOException;
-import java.io.File;
-
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
-import org.apache.hadoop.mapreduce.lib.input.MultipleInputs;
-import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import java.io.BufferedReader;
 import java.io.DataInputStream;
+import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.URI;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.ArrayWritable;
 import org.apache.hadoop.io.DoubleWritable;
 import org.apache.hadoop.io.IntWritable;
@@ -25,7 +21,8 @@ import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.Reducer;
-import java.net.URI;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 
 /**
  * Algorithm:
@@ -84,6 +81,7 @@ public class KMeans {
 	public static String CFILE = "cFile";
 	public static String NUMOFCLUSTERS="numOfClusters";
 	public static DecimalFormat df = new DecimalFormat("#.#####");
+	public static int NUMPOINTS = 96;
 
 	
 	
@@ -101,7 +99,9 @@ public class KMeans {
 			//String uriStr =  conf.get("fs.default.name");
 			
 			Configuration conf = context.getConfiguration();
-			String uriStr =  "s3n://energydata/centroid/";//"./centroid";
+			/***Uncomment for amazon  ***/
+			//String uriStr = "s3n://energydata/centroid/"; 
+			String uriStr = "./centroid";
 			URI uri = URI.create(uriStr);
 			FileSystem fs = FileSystem.get(uri, context.getConfiguration());		
 			
@@ -132,33 +132,34 @@ public class KMeans {
 				// 1. Get point and parse it
 				double[] point = parsePoint(value.toString());
 				String info  = parseInfo(value.toString()); //SPID, Date;
-
-				// 2. Get distance of point from each centroid
-				int closestCentroid = 0;
-				double distance = Long.MAX_VALUE;
-
-				for (double[] centroid : INIT) {
-					double tmp = distance(centroid, point);
-
-					if (tmp < distance) {
-						closestCentroid = INIT.indexOf(centroid);
-						distance = tmp;
-					}
+				double dailyTotal = 0;
+				for (int i=0; i<NUMPOINTS;i++){
+					dailyTotal+=point[i];
 				}
+				// 3. Find the closest centroid for the point (omit daily totals that are zero)
+				if (dailyTotal >0){
+					// 2. Get distance of point from each centroid
+					int closestCentroid = 0;
+					double distance = Long.MAX_VALUE;
 
-				// 3. Find the closest centroid for the point
+					for (double[] centroid : INIT) {
+						double tmp = distance(centroid, point);
 
-				// 4. Emit cluster id and point
-				context.write(new IntWritable(closestCentroid),
-						new Text(longArrayToString(point)));
-
-				//Write key=Centroid, Value=s-SPID,Date
-				context.write(new IntWritable(closestCentroid),
-						new Text("s-"+info));
-
-				//Write cost value with key=-1
-				context.write(new IntWritable(-1), new Text(df.format(Math.pow(distance, 2))));	
-			}
+						if (tmp < distance) {
+							closestCentroid = INIT.indexOf(centroid);
+							distance = tmp;
+						}
+					}
+					// 4. Emit cluster id and point
+					context.write(new IntWritable(closestCentroid),
+							new Text(longArrayToString(point)));
+					//Write key=Centroid, Value=s-SPID,Date
+					context.write(new IntWritable(closestCentroid),
+							new Text("s-"+info));
+					//Write cost value with key=-1
+					context.write(new IntWritable(-1), new Text(df.format(Math.pow(distance, 2))));	
+				}
+			} 
 		}
 
 	}
@@ -168,14 +169,18 @@ public class KMeans {
 
 		public String KEY = "k";
 		public String INFO = "s";
+		public int NUM_POINTS = 96;
 		public ArrayList<double[]> INIT = new ArrayList<double[]>();
+		public Log log=LogFactory.getLog(CentroidReducer.class);
 
 		@Override
 		protected void setup(Context context) throws IOException,
 				InterruptedException {
 
 			// Get the centroids and keep them in memory
-			String uriStr =  "s3n://energydata/output/";//"./output";//;
+			/*** Uncomment for amazon ***/
+			//String uriStr = "s3n://energydata/output/";
+			String uriStr = "./output";
 			URI uri = URI.create(uriStr);
 			FileSystem fs = FileSystem.get(uri, context.getConfiguration());	
 					
@@ -190,6 +195,7 @@ public class KMeans {
 			BufferedReader reader = new BufferedReader(new InputStreamReader(d));
 			String line;
 			int centroidLength=0;
+			//log.info("Reducer started reading centroids");
 			while ((line = reader.readLine()) != null) {
 				if (!line.startsWith("C") && !line.startsWith("s")&& !line.startsWith("w")&& centroidLength !=numOfClusters) { //changed by timnit to write the document IDs for each centroid
 					centroidLength++;
@@ -197,8 +203,8 @@ public class KMeans {
 					INIT.add(parsePoint(line));
 				}
 			}
+			//log.info("Reducer finished reading centroids");
 			reader.close();
-
 		}
 
 		@Override
@@ -209,11 +215,11 @@ public class KMeans {
 			//System.out.println("Key :"+ key.get());
 			//if statement added by Timnit to get SPID of people in cluster
 			ArrayList<String> infoList = new ArrayList<String>();
-			Log log=LogFactory.getLog(CentroidReducer.class);
+			String info = ""; 
+			
 			if (key.get() == -1) { //we are reading the cost
 				double cost = 0;
 				int no = 0;
-
 				// Get average for all dimensions and cost too !
 				for (Text str : values) {
 						no ++;
@@ -222,54 +228,50 @@ public class KMeans {
 				}
 				//System.out.println("NO of cost data points: "+no);
 				//System.out.println("Cost : "+ df.format(cost));
-				context.write(new Text("C" + "-" + key.toString()), new Text(df.format(cost)));
-				
+				context.write(new Text("C" + "-" + key.toString()), new Text(df.format(cost)));				
 			} else {
-
-				double[] average = new double[INIT.get(0).length];
+				double[] average = new double[NUM_POINTS];//new double[INIT.get(0).length];
 				int count = 0;
+				double[] point   = new double[NUM_POINTS];
 				// double cost = 0;
 
 				// Get average for all dimensions and cost too !
+				
+				log.info("Reducer started calculating" + Integer.toString(count));
 				for (Text str : values) {
-				    //log.info("Reducer starting comparison");
-					if (!str.toString().startsWith("s")) {//if string has comma it is spid & date
-						double[] point = parsePoint(str.toString());
-						//log.info("Reducer finished parsing");   
-						//log.info("Reducer starting calculation");
-						for (int i = 0; i < point.length; i++) {
-							// Average for new centroid
-							average[i] =  average[i]+point[i];
+					
+					String input = str.toString();
+					if (!input.startsWith("s")) {//if string has comma it is spid & date	
+						String[] tokens = input.split(" "); 
+						for (int i=0; i<NUM_POINTS;i++){
+						     point[i]=Double.parseDouble(tokens[i]);
+						     average[i] =  average[i]+point[i];
 						}
-						//log.info("Reducer ending comparison");
 					    count++;
 					}else { //just save the spid & date
-						infoList.add(str.toString());						
+						info += str.toString()+"\t";						
 					}
 				}
-
+				
 				// New centroid at center of mass for this cluster
-				for (int i = 0; i < average.length; i++) {
+				int ave_length = average.length;
+				for (int i = 0; i < ave_length; i++) {
 					average[i] = average[i] / count;
 				}
-
+				log.info("Reducer finished calculating" + Integer.toString(count));
+				
 				// Emit new centroid
-				String result = longArrayToString(average);
-				String info = "";
-				for (String s :infoList)
-				{
-					info += s+"\t";
-				}				
+				String result = longArrayToString(average); 
+				log.info("Reducer started writing" + Integer.toString(count));
 				context.write(new Text(KEY + "-" + key.toString()), new Text(
 						result));
+				log.info("Reducer wrote key" + Integer.toString(count));
 				context.write(new Text(INFO + "-" + key.toString()), new Text(
 						info));
-				//System.out.println("Reducer finished" + Integer.toString(count)); //to see how long reducers are taking & if they're getting stuck
-				log.info("Reducer finished" + Integer.toString(count));
+				log.info("Reducer ended writing" + Integer.toString(count));
+	
 			}
-
 		}
-
 	}
 
 	public static void main(String[] args) throws Exception {
@@ -277,6 +279,7 @@ public class KMeans {
 		//Run as inputDir outputDir centroidDir no_of_iters max_clusters stepSize 
 		//./ output ./energy-c1_norm.txt 2 10 10
 
+		long startTime = System.currentTimeMillis();   //Measure elapsed time
 		Configuration conf = new Configuration();
 
 		//FileSystem fs = FileSystem.get(conf);
@@ -289,55 +292,28 @@ public class KMeans {
 		int min_clusters = 10;
 		
 		
-		String uriStr = inputDir;//"./input";//"s3n://energydata/input/";	
+		String uriStr = inputDir;
 		URI uri = URI.create(uriStr);
         FileSystem fs = FileSystem.get(uri, conf);   
 		System.out.println("Working directory:"+fs.getWorkingDirectory().toString());
 		String inputFiles = "";
 		String baseFileName    = uriStr+"electric_interval_data_long_part";
 		String suffix = "_96.txt";
-		int numOfFiles = 1;//10;
+		int numOfFiles = 10;
 	    //*** uncomment this for hadoop		
 		for (int i=1;i<=numOfFiles;i++){
 			inputFiles +=baseFileName+ String.valueOf(i) +suffix+",";
 		}
-		inputFiles = inputFiles.substring(0, inputFiles.length()-1);
-	
-		
-		//inputFiles = uriStr+"energy-data.csv,"+uriStr+"test_shapes.csv";
-	
-		//Get all the input files in the input directory and concatenate them with a comma to input
-		//into the hadoop mapper
-		//Hard code the filenames for now cause Amazon EMR is having issues
-		
-	/*	
-		String []inputFilesArray= new File(uriStr).list();
-		System.out.println("Files:" + inputFilesArray.toString());
-		StringBuilder fileConcatenator = new StringBuilder();
-		int numOfFiles = inputFilesArray.length;
-		System.out.println(numOfFiles);
-	    String n = "";
-		for (int i=0;i<numOfFiles;i++){
-			n=inputFilesArray[i];
-			fileConcatenator.append(uriStr+n).append(",");
-		}
-	*/	
-	/*	
-	 * For some reason this did not work with amazon aws and a jar file
-		for (String n : inputFilesArray) {
-			//fileConcatenator.append("'").append(n).append("',");
-			fileConcatenator.append(uriStr+n).append(",");
-		}
-		
-		fileConcatenator.deleteCharAt(fileConcatenator.length() - 1);
-		String inputFiles = fileConcatenator.toString();
-	*/	
-		//System.out.println("inputs:" + inputFiles);
-		
+		/*** uncomment for amazon ***/
+		//inputFiles = inputFiles.substring(0, inputFiles.length()-1);
+		//inputFiles = uriStr+ "electric_interval_data_long_part1_and2_96.txt";
+		inputFiles ="./input-only/test_shapes-header.csv";
+		 
+			
 		//int j=50;
 		String cDir = "";
        //for (int j=min_clusters; j<=max_clusters;j+=stepSize){  //Number of clusters
-			int j=100;
+			int j=200;
         	String opDirBase = args[1]+String.valueOf(j);
         	conf.set(NUMOFCLUSTERS, String.valueOf(j));
         	//System.out.println(conf.get(NUMOFCLUSTERS));
@@ -398,7 +374,9 @@ public class KMeans {
 			    //System.out.println("output Dir:" + outputPath);
 			  // }
         }
-
+			long stopTime = System.currentTimeMillis();
+			long elapsedTime = stopTime - startTime;
+		    System.out.println(elapsedTime);
 	}
 
 	public static double[] parsePoint(String input) {
